@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/html">
+  <head>
+    <link
+      rel="stylesheet"
+      href="https://app.autodeskforma.eu/design-system/v2/forma/styles/base.css"
+    />
+    <style>
+      div {
+        display: flex;
+        height: 100px;
+        align-items: center;
+        justify-content: center;
+      }
+    </style>
+    <script type="module">
+      import { Forma } from "https://esm.sh/forma-embedded-view-sdk/auto";
+
+      /* Reply to host so iframe-messenger does not log "Unknown action" for this request */
+      Forma.onEmbeddedViewClosing(async () => {});
+
+      const callbackUrl = new URL("auth", `${window.location.origin}/`).href;
+
+      Forma.auth.configure({
+        clientId: "KAPhOkV57EloISnrvyAZhAM2A5ZeIA6vyvGU3TkjfWjHOLHh",
+        callbackUrl,
+        scopes: ["data:write", "data:read"],
+      });
+
+      Forma.auth.acquireTokenOverlay().then(
+        async (tokenResponse) => {
+          /* APS access tokens are JWTs (three dot-separated segments); this is expected, not an error. */
+          console.log(
+            "Access token (JWT) issued; length:",
+            tokenResponse.accessToken?.length,
+          );
+          try {
+            /* Prefer host-mediated project data: avoids 403 from direct REST when your APS app
+               is not provisioned for Forma HTTP APIs or when the token context does not match. */
+            const projectData = await Forma.project.get();
+            const projectElement = document.createElement("div");
+            projectElement.innerText = JSON.stringify(projectData);
+            document.body.appendChild(projectElement);
+          } catch (e) {
+            console.error("Forma.project.get failed:", e);
+          }
+        },
+        (err) => {
+          console.error("Forma.auth.acquireTokenOverlay failed:", err);
+          if (err?.errorType != null)
+            console.error("APS errorType:", err.errorType);
+          if (err?.errorDescription != null)
+            console.error("APS errorDescription:", err.errorDescription);
+        },
+      );
+      const element = document.createElement("div");
+      element.innerHTML = `Welcome to ${Forma.getProjectId()}`;
+      document.body.appendChild(element);
+      window.Forma = Forma;
+    </script>
+  </head>
+  <body></body>
+</html>
