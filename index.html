@@ -1,63 +1,384 @@
 <!doctype html>
-<html lang="en" xmlns="http://www.w3.org/1999/html">
+<html lang="en">
   <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Forma Wildfire Viewer</title>
     <link
       rel="stylesheet"
       href="https://app.autodeskforma.eu/design-system/v2/forma/styles/base.css"
     />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+    />
     <style>
-      div {
-        display: flex;
-        height: 100px;
-        align-items: center;
-        justify-content: center;
+      body {
+        margin: 0;
+        padding: 10px;
+        font-family: sans-serif;
+      }
+      #status {
+        margin-bottom: 8px;
+      }
+      #meta {
+        margin: 6px 0 10px;
+        font-size: 12px;
+      }
+      #map {
+        width: 100%;
+        height: 320px;
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+      }
+      #fires {
+        margin-top: 8px;
+        font-size: 12px;
+        max-height: 160px;
+        overflow: auto;
+        white-space: pre-wrap;
       }
     </style>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script type="module">
       import { Forma } from "https://esm.sh/forma-embedded-view-sdk/auto";
 
-      /* Reply to host so iframe-messenger does not log "Unknown action" for this request */
-      Forma.onEmbeddedViewClosing(async () => {});
+      const NASA_MAP_KEY = "4ffefa9bb24dcc53ff6adc63639d53c5";
+      const FIRMS_SOURCES = ["VIIRS_NOAA20_NRT", "VIIRS_SNPP_NRT", "MODIS_NRT"];
+      const FIRMS_LOOKBACK_DAYS = 2;
+      const MIN_FETCH_ZOOM = 3;
+      const FETCH_DEBOUNCE_MS = 900;
+      const CACHE_TTL_MS = 10 * 60 * 1000;
+      const MAX_CACHE_ENTRIES = 500;
+      const MAX_TILES_PER_FETCH = 20;
 
+      const statusEl = document.getElementById("status");
+      const metaEl = document.getElementById("meta");
+      const firesEl = document.getElementById("fires");
       const callbackUrl = new URL("auth", `${window.location.origin}/`).href;
+      const tileCache = new Map();
+      const markerByFireId = new Map();
+      let activeFetchController = null;
+      let debouncedTimer = null;
+      let clusterGroup = null;
+      let leafletMap = null;
 
-      Forma.auth.configure({
-        clientId: "KAPhOkV57EloISnrvyAZhAM2A5ZeIA6vyvGU3TkjfWjHOLHh",
-        callbackUrl,
-        scopes: ["data:write", "data:read"],
-      });
+      function setStatus(text) {
+        statusEl.textContent = text;
+      }
 
-      Forma.auth.acquireTokenOverlay().then(
-        async (tokenResponse) => {
-          /* APS access tokens are JWTs (three dot-separated segments); this is expected, not an error. */
-          console.log(
-            "Access token (JWT) issued; length:",
-            tokenResponse.accessToken?.length,
-          );
-          try {
-            /* Prefer host-mediated project data: avoids 403 from direct REST when your APS app
-               is not provisioned for Forma HTTP APIs or when the token context does not match. */
-            const projectData = await Forma.project.get();
-            const projectElement = document.createElement("div");
-            projectElement.innerText = JSON.stringify(projectData);
-            document.body.appendChild(projectElement);
-          } catch (e) {
-            console.error("Forma.project.get failed:", e);
+      function toTileX(longitude, zoom) {
+        return Math.floor(((longitude + 180) / 360) * 2 ** zoom);
+      }
+
+      function toTileY(latitude, zoom) {
+        const latRad = (latitude * Math.PI) / 180;
+        return Math.floor(
+          ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) *
+            2 ** zoom,
+        );
+      }
+
+      function tileBounds(x, y, zoom) {
+        const n = 2 ** zoom;
+        const lonLeft = (x / n) * 360 - 180;
+        const lonRight = ((x + 1) / n) * 360 - 180;
+        const latTop = (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
+        const latBottom =
+          (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 1)) / n))) * 180) / Math.PI;
+        return {
+          west: lonLeft,
+          south: latBottom,
+          east: lonRight,
+          north: latTop,
+        };
+      }
+
+      function getTilesForBounds(bounds, zoom) {
+        const south = Math.max(bounds.getSouth(), -85);
+        const north = Math.min(bounds.getNorth(), 85);
+        const west = bounds.getWest();
+        const east = bounds.getEast();
+        const xMin = toTileX(west, zoom);
+        const xMax = toTileX(east, zoom);
+        const yMin = toTileY(north, zoom);
+        const yMax = toTileY(south, zoom);
+        const tiles = [];
+        for (let x = xMin; x <= xMax; x += 1) {
+          for (let y = yMin; y <= yMax; y += 1) {
+            tiles.push({ x, y, zoom });
           }
-        },
-        (err) => {
-          console.error("Forma.auth.acquireTokenOverlay failed:", err);
-          if (err?.errorType != null)
-            console.error("APS errorType:", err.errorType);
-          if (err?.errorDescription != null)
-            console.error("APS errorDescription:", err.errorDescription);
-        },
-      );
-      const element = document.createElement("div");
-      element.innerHTML = `Welcome to ${Forma.getProjectId()}`;
-      document.body.appendChild(element);
-      window.Forma = Forma;
+        }
+        return tiles;
+      }
+
+      function csvToRows(csv) {
+        const lines = csv.trim().split("\n");
+        if (lines.length < 2) return [];
+        const headers = lines[0].split(",").map((h) => h.trim());
+        return lines.slice(1).map((line) => {
+          const values = line.split(",");
+          const row = {};
+          headers.forEach((header, i) => {
+            row[header] = values[i]?.trim() ?? "";
+          });
+          return row;
+        });
+      }
+
+      function mergeAndDeduplicate(rows) {
+        const byId = new Map();
+        for (const row of rows) {
+          const id = [
+            row.latitude,
+            row.longitude,
+            row.acq_date,
+            row.acq_time,
+            row.satellite || row.instrument || "",
+          ].join("|");
+          if (!byId.has(id)) byId.set(id, row);
+        }
+        return [...byId.values()];
+      }
+
+      async function fetchFirmsRowsForArea(area, signal) {
+        let lastError = null;
+        for (const source of FIRMS_SOURCES) {
+          const url =
+            `https://firms.modaps.eosdis.nasa.gov/api/area/csv/` +
+            `${NASA_MAP_KEY}/${source}/${area}/${FIRMS_LOOKBACK_DAYS}`;
+          try {
+            const res = await fetch(url, { signal });
+            if (!res.ok) {
+              throw new Error(`FIRMS ${source} failed (${res.status})`);
+            }
+            const csv = await res.text();
+            const rows = csvToRows(csv).map((row) => ({ ...row, _source: source }));
+            return { rows, source };
+          } catch (e) {
+            if (signal.aborted) throw e;
+            lastError = e;
+            console.warn(`FIRMS source ${source} failed`, e);
+          }
+        }
+        throw lastError ?? new Error("All FIRMS sources failed");
+      }
+
+      function touchCacheEntry(cacheKey, entry) {
+        tileCache.delete(cacheKey);
+        tileCache.set(cacheKey, entry);
+        if (tileCache.size > MAX_CACHE_ENTRIES) {
+          const oldest = tileCache.keys().next().value;
+          if (oldest) tileCache.delete(oldest);
+        }
+      }
+
+      async function getTileRows(tile, signal) {
+        const cacheKey = `${tile.zoom}/${tile.x}/${tile.y}`;
+        const now = Date.now();
+        const cached = tileCache.get(cacheKey);
+        if (cached && now - cached.at < CACHE_TTL_MS) {
+          touchCacheEntry(cacheKey, cached);
+          return { rows: cached.rows, cacheHit: true, source: cached.source };
+        }
+
+        const bbox = tileBounds(tile.x, tile.y, tile.zoom);
+        const area = `${bbox.west.toFixed(6)},${bbox.south.toFixed(6)},${bbox.east.toFixed(6)},${bbox.north.toFixed(6)}`;
+        const { rows, source } = await fetchFirmsRowsForArea(area, signal);
+        touchCacheEntry(cacheKey, { rows, source, at: now });
+        return { rows, cacheHit: false, source };
+      }
+
+      function clearFireMarkers() {
+        clusterGroup.clearLayers();
+        markerByFireId.clear();
+      }
+
+      function renderFireRows(rows) {
+        clearFireMarkers();
+        for (const row of rows) {
+          const lat = Number(row.latitude);
+          const lon = Number(row.longitude);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+          const brightness = row.bright_ti4 || row.brightness || "n/a";
+          const confidence = row.confidence || row.confidence_level || "n/a";
+          const date = row.acq_date || "n/a";
+          const time = row.acq_time || "n/a";
+          const source = row._source || "n/a";
+          const id = `${lat}|${lon}|${date}|${time}|${source}`;
+          const marker = L.circleMarker([lat, lon], {
+            radius: 4,
+            color: "#e03131",
+            fillColor: "#ff6b6b",
+            fillOpacity: 0.8,
+            weight: 1,
+          }).bindPopup(
+            `Fire detection<br/>Source: ${source}<br/>Date: ${date} ${time}<br/>Brightness: ${brightness}<br/>Confidence: ${confidence}`,
+          );
+          markerByFireId.set(id, marker);
+          clusterGroup.addLayer(marker);
+        }
+      }
+
+      async function refreshForViewport() {
+        if (!leafletMap) return;
+        const currentZoom = leafletMap.getZoom();
+        if (currentZoom < MIN_FETCH_ZOOM) {
+          clearFireMarkers();
+          setStatus(`Zoom in to level ${MIN_FETCH_ZOOM}+ to load wildfire detections.`);
+          firesEl.textContent = "";
+          return;
+        }
+
+        const tileZoom = Math.max(MIN_FETCH_ZOOM, Math.min(7, Math.floor(currentZoom) - 1));
+        const tiles = getTilesForBounds(leafletMap.getBounds(), tileZoom);
+        if (tiles.length > MAX_TILES_PER_FETCH) {
+          clearFireMarkers();
+          setStatus(
+            `Too many visible tiles (${tiles.length}). Zoom in to load fires without hitting rate limits.`,
+          );
+          firesEl.textContent = "";
+          return;
+        }
+
+        if (activeFetchController) {
+          activeFetchController.abort();
+        }
+        activeFetchController = new AbortController();
+        const signal = activeFetchController.signal;
+
+        setStatus(`Loading wildfire tiles (${tiles.length})...`);
+        let cacheHits = 0;
+        let loadedTiles = 0;
+        const allRows = [];
+        for (const tile of tiles) {
+          try {
+            const { rows, cacheHit } = await getTileRows(tile, signal);
+            if (cacheHit) cacheHits += 1;
+            loadedTiles += 1;
+            allRows.push(...rows);
+          } catch (e) {
+            if (signal.aborted) {
+              return;
+            }
+            console.warn("Tile load failed", tile, e);
+          }
+        }
+
+        const rows = mergeAndDeduplicate(allRows);
+        renderFireRows(rows);
+        setStatus(
+          `Loaded ${rows.length} detections from ${loadedTiles} tiles (${cacheHits} cached, zoom ${currentZoom}).`,
+        );
+        const preview = rows.slice(0, 10);
+        firesEl.textContent =
+          rows.length === 0
+            ? "No active fire detections in this viewport."
+            : `Showing first ${preview.length} of ${rows.length} detections:\n` +
+              JSON.stringify(preview, null, 2);
+      }
+
+      function scheduleViewportRefresh() {
+        if (debouncedTimer) clearTimeout(debouncedTimer);
+        debouncedTimer = setTimeout(() => {
+          refreshForViewport().catch((err) => {
+            if (err?.name === "AbortError") return;
+            console.error("Viewport refresh failed:", err);
+            setStatus("Failed to refresh wildfire data.");
+          });
+        }, FETCH_DEBOUNCE_MS);
+      }
+
+      function initializeMap(projectLatitude, projectLongitude) {
+        leafletMap = L.map("map", {
+          worldCopyJump: true,
+          preferCanvas: true,
+        }).setView([projectLatitude, projectLongitude], 5);
+
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution: "&copy; OpenStreetMap contributors",
+        }).addTo(leafletMap);
+
+        L.marker([projectLatitude, projectLongitude])
+          .bindPopup("Forma project location")
+          .addTo(leafletMap);
+
+        clusterGroup = L.markerClusterGroup({
+          chunkedLoading: true,
+          disableClusteringAtZoom: 9,
+          maxClusterRadius: 55,
+          spiderfyOnMaxZoom: true,
+          showCoverageOnHover: false,
+        });
+        leafletMap.addLayer(clusterGroup);
+
+        leafletMap.on("moveend zoomend", scheduleViewportRefresh);
+      }
+
+      async function ensureProjectLocation() {
+        setStatus("Reading project location...");
+        const geo = await Forma.project.getGeoLocation();
+        if (geo) return geo;
+        const projectData = await Forma.project.get();
+        if (
+          projectData &&
+          Number.isFinite(projectData.latitude) &&
+          Number.isFinite(projectData.longitude)
+        ) {
+          return [projectData.latitude, projectData.longitude];
+        }
+        throw new Error("Project geolocation is not available.");
+      }
+
+      async function run() {
+        Forma.onEmbeddedViewClosing(async () => {});
+
+        Forma.auth.configure({
+          clientId: "KAPhOkV57EloISnrvyAZhAM2A5ZeIA6vyvGU3TkjfWjHOLHh",
+          callbackUrl,
+          scopes: ["data:write", "data:read"],
+        });
+
+        setStatus("Signing in...");
+        const tokenResponse = await Forma.auth.acquireTokenOverlay();
+        console.log("Access token (JWT) issued; length:", tokenResponse.accessToken?.length);
+
+        const geo = await ensureProjectLocation();
+        const [projectLatitude, projectLongitude] = geo;
+        metaEl.textContent =
+          `Project: ${Forma.getProjectId()} | Region: ${Forma.getRegion()} | ` +
+          `Lat/Lon: ${projectLatitude.toFixed(5)}, ${projectLongitude.toFixed(5)}`;
+
+        initializeMap(projectLatitude, projectLongitude);
+        scheduleViewportRefresh();
+      }
+
+      run().catch((err) => {
+        setStatus("Failed. Check console for details.");
+        console.error("Wildfire extension error:", err);
+      });
     </script>
   </head>
-  <body></body>
+  <body>
+    <div id="status">Booting...</div>
+    <div id="meta"></div>
+    <div id="map"></div>
+    <pre id="fires"></pre>
+  </body>
 </html>
