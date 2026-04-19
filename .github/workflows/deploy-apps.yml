@@ -44,14 +44,6 @@ jobs:
           token: ${{ secrets.PERSONAL_PAGES_REPO_TOKEN }}
           path: pages-repo
 
-      - name: Build and sync hello-world
-        env:
-          BASE_PATH: /forma-design-extensions/hello-world/
-        run: |
-          pnpm --filter @hesam/hello-world build
-          mkdir -p "pages-repo/public/forma-design-extensions/hello-world"
-          rsync -a --delete "apps/hello-world/dist/" "pages-repo/public/forma-design-extensions/hello-world/"
-
       - name: Build and sync where-is-the-fire
         env:
           BASE_PATH: /forma-design-extensions/where-is-the-fire/
