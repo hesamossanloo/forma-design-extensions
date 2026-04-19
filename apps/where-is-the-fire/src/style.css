@@ -1,0 +1,121 @@
+@import "leaflet/dist/leaflet.css";
+@import "leaflet.markercluster/dist/MarkerCluster.css";
+@import "leaflet.markercluster/dist/MarkerCluster.Default.css";
+
+:root {
+  color-scheme: light;
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  background:
+    radial-gradient(circle at top, rgba(255, 115, 64, 0.12), transparent 40%),
+    linear-gradient(180deg, #f8f5f0 0%, #efe7dc 100%);
+  color: #1d1a17;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+#status,
+#meta,
+#map,
+#fires,
+.auth-shell {
+  box-sizing: border-box;
+}
+
+#status,
+#meta,
+#fires,
+.auth-shell {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+#status {
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(64, 45, 29, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+  font-weight: 600;
+}
+
+#meta {
+  margin-bottom: 10px;
+  color: #5b5147;
+  font-size: 13px;
+}
+
+#map {
+  width: min(960px, 100%);
+  height: 440px;
+  margin: 0 auto;
+  border: 1px solid rgba(64, 45, 29, 0.14);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(51, 30, 17, 0.12);
+}
+
+#fires {
+  margin: 10px auto 0;
+  padding: 12px 14px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid rgba(64, 45, 29, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #473e36;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.auth-shell {
+  margin-top: 10vh;
+  padding: 24px 28px;
+  border: 1px solid rgba(64, 45, 29, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 20px 60px rgba(51, 30, 17, 0.12);
+}
+
+.auth-shell h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.auth-shell p {
+  margin: 0 0 14px;
+  color: #5b5147;
+}
+
+.auth-shell pre {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #1b1815;
+  color: #f5efe6;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.is-error {
+  color: #b42318;
+}
+
+@media (max-width: 720px) {
+  #app {
+    padding: 8px;
+  }
+
+  #map {
+    height: 360px;
+  }
+}

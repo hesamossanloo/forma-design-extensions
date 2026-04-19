@@ -1,0 +1,76 @@
+name: Deploy Forma Design Extensions
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "apps/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
+      - ".github/workflows/deploy-apps.yml"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.7.1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Checkout Pages repo
+        uses: actions/checkout@v4
+        with:
+          repository: hesamossanloo/hesamossanloo.github.io
+          token: ${{ secrets.PERSONAL_PAGES_REPO_TOKEN }}
+          path: pages-repo
+
+      - name: Build and sync hello-world
+        env:
+          BASE_PATH: /forma-design-extensions/hello-world/
+        run: |
+          pnpm --filter @hesam/hello-world build
+          mkdir -p "pages-repo/public/forma-design-extensions/hello-world"
+          rsync -a --delete "apps/hello-world/dist/" "pages-repo/public/forma-design-extensions/hello-world/"
+
+      - name: Build and sync where-is-the-fire
+        env:
+          BASE_PATH: /forma-design-extensions/where-is-the-fire/
+          VITE_FORMA_CLIENT_ID: ${{ secrets.VITE_FORMA_CLIENT_ID }}
+          VITE_NASA_MAP_KEY: ${{ secrets.VITE_NASA_MAP_KEY }}
+        run: |
+          pnpm --filter @hesam/where-is-the-fire build
+          mkdir -p "pages-repo/public/forma-design-extensions/where-is-the-fire"
+          rsync -a --delete "apps/where-is-the-fire/dist/" "pages-repo/public/forma-design-extensions/where-is-the-fire/"
+
+      - name: Commit and push Pages repo update
+        working-directory: pages-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/forma-design-extensions
+          if git diff --cached --quiet; then
+            echo "No changes to publish."
+            exit 0
+          fi
+          git commit -m "Deploy Forma extensions from ${GITHUB_SHA}"
+          git push origin HEAD
