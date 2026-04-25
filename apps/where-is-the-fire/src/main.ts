@@ -1,6 +1,9 @@
 import "./style.css";
 import L from "leaflet";
 import "leaflet.markercluster";
+import markerIcon2xUrl from "leaflet/dist/images/marker-icon-2x.png";
+import markerIconUrl from "leaflet/dist/images/marker-icon.png";
+import markerShadowUrl from "leaflet/dist/images/marker-shadow.png";
 import { callbackUrl, formaClientIdValue, nasaMapKeyValue } from "./config";
 import { loadForma } from "./forma";
 
@@ -52,6 +55,12 @@ let activeFetchController: AbortController | null = null;
 let debouncedTimer: number | null = null;
 let clusterGroup: L.MarkerClusterGroup | null = null;
 let leafletMap: L.Map | null = null;
+
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: markerIcon2xUrl,
+  iconUrl: markerIconUrl,
+  shadowUrl: markerShadowUrl,
+});
 
 function setStatus(text: string) {
   statusEl.textContent = text;
