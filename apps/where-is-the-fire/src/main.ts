@@ -56,6 +56,10 @@ let debouncedTimer: number | null = null;
 let clusterGroup: L.MarkerClusterGroup | null = null;
 let leafletMap: L.Map | null = null;
 
+delete (L.Icon.Default.prototype as L.Icon.Default & {
+  _getIconUrl?: unknown;
+})._getIconUrl;
+
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: markerIcon2xUrl,
   iconUrl: markerIconUrl,
